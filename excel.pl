@@ -107,17 +107,6 @@ sub add_host_ref($$;$)
      $t->{hostref} = $h;
    } else { die "Host $host not found in host table"; }
 }
-#========================================================================
-# 
-#========================================================================
-#sub disk_key_parser
-#{
-#   my $data = shift;
-#   my ($host, undef, $model) = @$data;
-#   ($host) = split ("/",$host);
-#   $data->[0] = $host;     # Replace the hostname in the data array
-#   return "$host$SUBSEP$model";
-#}
 
 sub disk_parser()
 {
@@ -141,18 +130,6 @@ sub disk_parser()
   add_host_ref ($t, $host, $sn); 
 }
 
-
-#sub shelf_key_parser
-#{
-#   my $data = shift;
-#   my ($host, undef, $type, $module) = @$data;
-#   my $sn;
-#   ($host, $sn) = split ("/",$host);
-#   $data->[0] = $host;     # Replace the hostname in the data array
-#   $data->[8] = "$type/$module";
-##   $data->[6] = (split(",", $data->[6]))[-1];      #use only the last recommended firmware;
-#   return "$host$SUBSEP$type/$module";
-#}
 
 
 sub shelf_parser()
@@ -183,7 +160,6 @@ sub shelf_parser()
   add_host_ref ($t, $host, $sn); 
 }
 
-#get_section_data ($firmware, "Shelf Firmware Review", 9, \&custom_key_parser, \%shelves, \&shelf_key_parser, "S:H", "S:C", "S:T", "S:M", "S:MC", "S:V", "S:L", "UPTD", "S:TM");
 get_section_data ($firmware, "Shelf Firmware Review", 9, \&shelf_parser, \%shelves);
 patch_latest (\%shelves, "S:L");
 
@@ -245,23 +221,8 @@ sub aggregate_parser($$)
    
 }
 
-#sub aggregate_key_parser
-#{
-#   my $data = shift;
-#   my ($t, $inst, $used, $capacity, $growthperday, $cap, $date) = @$data;
-#   
-#   return if ($t ne 'aggregate');     
-#   print STDERR "Processing aggregate data: " . join (";", @$data) . "\n";
-#   # Remove some old formatting characters
-#   for (my $i=0; $i<scalar(@$data); ++$i) {
-#     $data->[$i] =~ s/^\[.*\]//; 
-#   }
-#   return $inst;
-#}
 
 get_data_from_row ($capacity, 6, 7, \&aggregate_parser, \%aggregates);
-
-#get_data_from_row ($capacity, 6, 7, \&custom_key_parser, \%aggregates, \&aggregate_key_parser, undef, "A:NAME", "A:USED", "A:CAP", "A:G", "A:D");
 
 
 print Dumper (\%hosts, \%shelves, \%disks, \%aggregates);
