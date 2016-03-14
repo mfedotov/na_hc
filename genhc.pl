@@ -25,7 +25,7 @@ my %templates =
 
 my @files = <*.xlsx>;
 
-print "Files are " . join (", ", @files) . "\n";
+#print "Files are " . join (", ", @files) . "\n";
 
 for my $file (@files) {
   add_file ($file);
@@ -42,7 +42,7 @@ foreach my $customer (keys %xl_files) {
   } 
 }
     
-print Dumper (\%xl_files, \@errors, \@bad_customers);    
+#print Dumper (\%xl_files, \@errors, \@bad_customers);    
 
 for my $c (@bad_customers) {
   delete $xl_files{$c};
@@ -158,6 +158,9 @@ sub shelf_parser()
   my $sn;
   ($host, $sn) = split ("/",$host);
   #print STDERR "Processing shelf data: " . join (";", @$data) . "\n";
+  if ($type eq "0") {
+    $type = "Internal";
+  }
   my $tm = "$type/$m";
 ;
   my $key = "$host$SUBSEP$tm";
@@ -195,7 +198,7 @@ sub aggregate_parser($$)
   
   return if ($data->[0] ne 'aggregate');     
 
-  print STDERR "Processing aggregate data: " . join (";", @$data) . "\n";
+  #print STDERR "Processing aggregate data: " . join (";", @$data) . "\n";
   # Remove some old formatting characters
   for (my $i=0; $i<scalar(@$data); ++$i) {
     $data->[$i] =~ s/^\[.*\]//; 
@@ -244,7 +247,7 @@ sub get_values($$$$)
         $value = $cell->unformatted(); 
       }
       
-      if ($cell->is_merged() && !$value) {
+      if ($cell->is_merged() && $value eq "") {
           #print STDERR "Cell $r, $i is merged and ignored, (value is [$value])\n";
           next;
       }
@@ -360,8 +363,8 @@ sub gen_report($)
     if ($cell && $cell->value() eq "Filer") {
       my ($model, $host, $serial, $os) = get_values ($sysinv, $i, 1, 4);
       $hosts{$host} = {"H:H"=>$host, "H:M"=>$model, "H:S"=>$serial, "H:V"=>$os, "H:MODE"=> ($os =~ /7-Mode/i)? "7mode" : "Cmode"};
-    
-    #print "Data: $model $host $serial $os\n";
+      $hosts{$host}->{hostref} = $hosts{$host};
+      #print "Data: $model $host $serial $os\n";
     }
 
   }  
@@ -372,6 +375,7 @@ sub gen_report($)
   get_section_data ($firmware, "Motherboard Firmware Review", 5, \&hash_parser, \%hosts, undef, "H:MBV", "H:MBL", "MBUPTD");
   patch_latest (\%hosts, "H:MBL");
 
+  
   get_section_data ($firmware, "Shelf Firmware Review", 9, \&shelf_parser, \%shelves, \%hosts);
   patch_latest (\%shelves, "S:L");
 
@@ -394,8 +398,8 @@ sub gen_report($)
     $host_mode{$mode} ||= [];
     push @{$host_mode{$mode}}, $hostname;     
   }
-  print Dumper (\%host_mode);
-  
+  print Dumper (\%tables);
+  #exit;
   # Generate a separate report for each mode (7mode, cmode)
   for my $mode (keys %host_mode) {
     my $template = $templates{$mode};
@@ -404,13 +408,113 @@ sub gen_report($)
   }    
 }
 
+#========================================================================
+# 
+#========================================================================
+sub grep_mode($$$)
+{
+   my ($key, $table, $mode) = @_;
+   my $entry = $table->{$key};
+      
+   die unless ($entry);
+   my $hostref = $entry->{hostref};
+   die "No hostref record" unless ($hostref);
+   return ($hostref->{'H:MODE'} eq $mode);
+}
 
 #========================================================================
 # 
 #========================================================================
 sub gen_word_output($$$$)
 {
-  my ($outfile, $template, $tables, $mode) =@_;
+  my ($outfile, $template, $data_tables, $mode) =@_;
 
   print STDERR "Generating $outfile from $template...\n"; 
+
+  my $word = CreateObject Win32::OLE 'Word.Application' or die $!;
+  $word->{'Visible'} = 1;
+
+  my $BaseDir=$Bin;
+  my $document = $word->Documents->Open("$BaseDir/$template");
+  $document->SaveAs("$BaseDir/$outfile");
+
+  my $tables = $word->ActiveDocument->Tables;
+
+  TABLE:
+  for my $table (Win32::OLE::in($tables))
+  {
+    #print "Processing table...\n";
+
+    my $rows = $table->Rows->{Count};
+    #print STDERR "Count of rows is $rows\n";
+    my $cols = $table->Columns->{Count};
+
+    for (my $r=1; $r<=$rows; ++$r) {
+      my $text = $table->Cell($r,1)->Range->{Text};
+      $text =~ s/[[:cntrl:]]+//g;
+      print STDERR "$r: [$text]\n";
+      if ($text =~ /^<(\w+):(\w+)>/) {
+        my $tbl = $1;
+        my $tag = "$1:$2";
+        
+        #print "Processing this line with tag $tag...\n";
+        my $data_table = $data_tables->{$tbl};
+        die "There is no table $tbl" unless ($data_table);
+        # Replace the first line, add additional
+        my @keys = sort grep {grep_mode($_, $data_table, $mode)} keys %$data_table;
+        print STDERR "Keys for table $tbl: " . join (";", @keys) . "\n";
+
+        my $num_keys = scalar(@keys);
+        #print "Number of rows in $tbl table: $num_keys\n";
+        #$table->Rows->Item($r)->Select;
+        #$word->Selection->Copy;
+        #$table->Cell($r,1)->Range->{Text} = "Line 1";
+        for (2..$num_keys) {
+          #print "Adding row in $tbl table...\n";
+          $table->Rows->Item($r)->Select;
+          $word->Selection->Copy;
+          $word->Selection->PasteAppendTable;
+          #$table->Rows->Add($table->Rows($r));
+        }
+        # Process the added rows
+        #print "Processing new rows - keys are " . join ("; ", @keys) . "\n\n";
+        for (my $i=0; $i<$num_keys; ++$i) {
+          my $key = shift @keys;
+          my $data_row = $data_table->{$key};
+          for (my $col=1; $col<=$cols; ++$col) {
+             my $cell = $table->Cell($r+$i,$col);
+             my $txt = $cell ? $cell->Range->{Text} : "";
+             #print "Cell ($i, $col): $txt\n";
+             if ($txt =~ /^<CMP>/ && $col > 2) {
+                # Special tag to compare two previous columns
+                my $t1 = $table->Cell($r+$i,$col-2)->Range->{Text};
+                my $t2 = $table->Cell($r+$i,$col-1)->Range->{Text};
+                my $t = ($t1 eq $t2) ? "No Action Required" : "See Below";
+                #print "Comparing previous cells: $t1 and $t2 - $t\n";
+                $table->Cell($r+$i,$col)->Range->{Text} = $t;
+
+             }
+                 
+             if ($txt =~ /^<(\w+):(\w+)>/) {
+               my $tag = "$1:$2";
+               #print "Searching for $tag in " . Dumper ($data_row) . "\n";
+               if ($data_row->{$tag}) {
+                  #print STDERR "Replacing $txt with $data_row->{$tag}\n";
+                  $table->Cell($r+$i,$col)->Range->{Text} = $data_row->{$tag};
+               }
+             }
+          }
+        #$table->Cell($r,1)->Range->{Text} = "Line 2";
+        #last; # Stop processing the currentrows, start processing the next table
+        }
+        $r += $num_keys;
+        $rows += $num_keys;  
+        #print "New starting row in the table is $r (of total $rows rows)...\n";
+      #next TABLE; 
+      }
+    }
+  }
+  
+  $document->Save();
+  $document->Close();
 }
