@@ -44,7 +44,8 @@ for (my $i=$min; $i<=$max; ++$i ) {
   my $cell = $sysinv->get_cell($i, 0);
   if ($cell && $cell->value() eq "Filer") {
     my ($model, $host, $serial, $os) = get_values ($sysinv, $i, 1, 4);
-    $hosts{$host} = {"H:H"=>$host, "H:M"=>$model, "H:S"=>$serial, "H:V"=>$os};
+    $hosts{$host} = {"H:H"=>$host, "H:M"=>$model, "H:S"=>$serial, "H:V"=>$os, "H:MODE"=> ($os =~ /7-Mode/i)? "7mode" : "Cmode"};
+    
     #print "Data: $model $host $serial $os\n";
   }
 
@@ -94,30 +95,99 @@ my %tables = (
 #========================================================================
 # 
 #========================================================================
-sub disk_key_parser
+sub add_host_ref($$;$)
 {
-   my $data = shift;
-   my ($host, undef, $model) = @$data;
-   ($host) = split ("/",$host);
-   $data->[0] = $host;     # Replace the hostname in the data array
-   return "$host$SUBSEP$model";
+   my ($t, $host, $sn) = @_;
+
+   my $h = $hosts{$host};
+   if ($h) {
+     if ($sn && $h->{"H:S"} ne $sn) {
+       die "Host $host serial number $sn does not match data in host table"
+     }
+     $t->{hostref} = $h;
+   } else { die "Host $host not found in host table"; }
+}
+#========================================================================
+# 
+#========================================================================
+#sub disk_key_parser
+#{
+#   my $data = shift;
+#   my ($host, undef, $model) = @$data;
+#   ($host) = split ("/",$host);
+#   $data->[0] = $host;     # Replace the hostname in the data array
+#   return "$host$SUBSEP$model";
+#}
+
+sub disk_parser()
+{
+  my ($data, $target) = @_; 
+
+  my ($host, undef, $m, $c, $v, $l, $uptd) = @$data;
+  my $sn;
+  ($host, $sn) = split ("/",$host);
+#get_section_data ($firmware, "Disk Firmware Review", 6, \&custom_key_parser, \%disks, \&disk_key_parser, "D:H", undef, "D:M", "D:C", "D:V", "D:L", "D:UPTD");
+  my $key = "$host$SUBSEP$m";
+  
+  my $t = $target->{$key} ||= {};
+  
+  $t->{'D:H'} = $host;
+  $t->{'D:C'} = $c;
+  $t->{'D:M'} = $m;
+  $t->{'D:V'} = $v;
+  $t->{'D:L'} = $l;
+  $t->{'D:UPTD'} = $uptd;
+  $t->{'D:HOSTSN'} = $sn;
+  add_host_ref ($t, $host, $sn); 
 }
 
-sub shelf_key_parser
+
+#sub shelf_key_parser
+#{
+#   my $data = shift;
+#   my ($host, undef, $type, $module) = @$data;
+#   my $sn;
+#   ($host, $sn) = split ("/",$host);
+#   $data->[0] = $host;     # Replace the hostname in the data array
+#   $data->[8] = "$type/$module";
+##   $data->[6] = (split(",", $data->[6]))[-1];      #use only the last recommended firmware;
+#   return "$host$SUBSEP$type/$module";
+#}
+
+
+sub shelf_parser()
 {
-   my $data = shift;
-   my ($host, undef, $type, $module) = @$data;
-   ($host) = split ("/",$host);
-   $data->[0] = $host;     # Replace the hostname in the data array
-   $data->[8] = "$type/$module";
-#   $data->[6] = (split(",", $data->[6]))[-1];      #use only the last recommended firmware;
-   return "$host$SUBSEP$type/$module";
+  my ($data, $target) = @_; 
+
+  my ($host, $c, $type, $m, $mc, $v, $l, $uptd) = @$data;
+  my $sn;
+  ($host, $sn) = split ("/",$host);
+  #print STDERR "Processing shelf data: " . join (";", @$data) . "\n";
+  my $tm = "$type/$m";
+;
+  my $key = "$host$SUBSEP$tm";
+  
+  my $t = $target->{$key} ||= {};
+  
+  $t->{'S:H'} = $host;
+  $t->{'S:T'} = $type;
+  $t->{'S:C'} = $c;
+  $t->{'S:M'} = $m;
+  $t->{'S:MC'} = $mc;
+  $t->{'S:V'} = $v;
+  $t->{'S:L'} = $l;
+  $t->{'S:UPTD'} = $uptd;
+  $t->{'S:TM'} = $tm;
+  $t->{'S:HOSTSN'} = $sn;
+
+  add_host_ref ($t, $host, $sn); 
 }
 
-get_section_data ($firmware, "Shelf Firmware Review", 9, \&custom_key_parser, \%shelves, \&shelf_key_parser, "S:H", "S:C", "S:T", "S:M", "S:MC", "S:V", "S:L", "UPTD", "S:TM");
+#get_section_data ($firmware, "Shelf Firmware Review", 9, \&custom_key_parser, \%shelves, \&shelf_key_parser, "S:H", "S:C", "S:T", "S:M", "S:MC", "S:V", "S:L", "UPTD", "S:TM");
+get_section_data ($firmware, "Shelf Firmware Review", 9, \&shelf_parser, \%shelves);
 patch_latest (\%shelves, "S:L");
 
-get_section_data ($firmware, "Disk Firmware Review", 6, \&custom_key_parser, \%disks, \&disk_key_parser, "D:H", undef, "D:M", "D:C", "D:V", "D:L", "D:UPTD");
+get_section_data ($firmware, "Disk Firmware Review", 6, \&disk_parser, \%disks);
 
 
 my $hc_workbook = $parser->parse($hc_xl);
@@ -153,6 +223,7 @@ sub aggregate_parser($$)
   my (undef, $inst, $used, $capacity, $growthperday, $cap, $date) = @$data;
 
   my $key = $inst;
+  my ($host, $aggr) = split (":", $inst);
   
   my $t = $target->{$key} ||= {};
   if ($date eq 'n/a') {
@@ -166,32 +237,34 @@ sub aggregate_parser($$)
   $t->{'A:PU'} = format_num(int (($used * 100) / $capacity + 0.5));
   $t->{'A:G'} = format_num($growthperday);
   $t->{'A:EST'} = $date;
+
+  $t->{'A:HOST'} = $host;
+  $t->{'A:AGGR'} = $aggr;
      
+  add_host_ref ($t, $host); 
+   
 }
 
-sub aggregate_key_parser
-{
-   my $data = shift;
-   my ($t, $inst, $used, $capacity, $growthperday, $cap, $date) = @$data;
-   
-   return if ($t ne 'aggregate');     
-   print STDERR "Processing aggregate data: " . join (";", @$data) . "\n";
-   # Remove some old formatting characters
-   for (my $i=0; $i<scalar(@$data); ++$i) {
-     $data->[$i] =~ s/^\[.*\]//; 
-   }
-   return $inst;
-}
+#sub aggregate_key_parser
+#{
+#   my $data = shift;
+#   my ($t, $inst, $used, $capacity, $growthperday, $cap, $date) = @$data;
+#   
+#   return if ($t ne 'aggregate');     
+#   print STDERR "Processing aggregate data: " . join (";", @$data) . "\n";
+#   # Remove some old formatting characters
+#   for (my $i=0; $i<scalar(@$data); ++$i) {
+#     $data->[$i] =~ s/^\[.*\]//; 
+#   }
+#   return $inst;
+#}
 
 get_data_from_row ($capacity, 6, 7, \&aggregate_parser, \%aggregates);
 
 #get_data_from_row ($capacity, 6, 7, \&custom_key_parser, \%aggregates, \&aggregate_key_parser, undef, "A:NAME", "A:USED", "A:CAP", "A:G", "A:D");
 
 
-print Dumper \%hosts;
-print Dumper \%shelves;
-print Dumper \%disks;
-print Dumper \%aggregates;
+print Dumper (\%hosts, \%shelves, \%disks, \%aggregates);
 
 
 exit(0);
