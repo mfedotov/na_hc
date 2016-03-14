@@ -6,6 +6,7 @@ use Data::Dumper;
 sub add_file($);
 sub gen_report($);
 
+my $debug = 0;
 my @errors;
 my @bad_customers;
 
@@ -20,12 +21,18 @@ my %required_files =
 my %templates =
 (
    '7mode' => "7mode.docx",
-   'cmode' => "cmode.docx",
+   'Cmode' => "cmode.docx",
 );
 
 my @files = <*.xlsx>;
 
 #print "Files are " . join (", ", @files) . "\n";
+
+my $word_obj;
+my $excel_obj;
+END {
+   $word_obj->Quit();  
+}
 
 for my $file (@files) {
   add_file ($file);
@@ -48,7 +55,7 @@ for my $c (@bad_customers) {
   delete $xl_files{$c};
 }
 
-print Dumper (\%xl_files);    
+print Dumper (\%xl_files) if $debug;
 
 for my $c (keys %xl_files) {
    print STDERR "Processing $c...\n";
@@ -348,9 +355,9 @@ sub gen_report($)
     A => \%aggregates,
   );
 
-  my $parser = Spreadsheet::ParseXLSX->new;
+  $excel_obj ||= Spreadsheet::ParseXLSX->new;
   print STDERR "Processing $srr_xl...\n";
-  my $workbook = $parser->parse($srr_xl);
+  my $workbook = $excel_obj->parse($srr_xl);
 
 
   my $sysinv = $workbook->worksheet("System Inventory");
@@ -383,7 +390,7 @@ sub gen_report($)
 
 
   print STDERR "Processing $hc_xl...\n";
-  my $hc_workbook = $parser->parse($hc_xl);
+  my $hc_workbook = $excel_obj->parse($hc_xl);
   my $capacity = $hc_workbook->worksheet("Predictive Capacity") or die;
 
   get_data_from_row ($capacity, 6, 7, \&aggregate_parser, \%aggregates, \%hosts);
@@ -398,7 +405,7 @@ sub gen_report($)
     $host_mode{$mode} ||= [];
     push @{$host_mode{$mode}}, $hostname;     
   }
-  print Dumper (\%tables);
+  print Dumper (\%tables) if ($debug);
   #exit;
   # Generate a separate report for each mode (7mode, cmode)
   for my $mode (keys %host_mode) {
@@ -422,6 +429,8 @@ sub grep_mode($$$)
    return ($hostref->{'H:MODE'} eq $mode);
 }
 
+
+
 #========================================================================
 # 
 #========================================================================
@@ -431,14 +440,14 @@ sub gen_word_output($$$$)
 
   print STDERR "Generating $outfile from $template...\n"; 
 
-  my $word = CreateObject Win32::OLE 'Word.Application' or die $!;
-  $word->{'Visible'} = 1;
+  $word_obj ||= CreateObject Win32::OLE 'Word.Application' or die $!;
+  $word_obj->{'Visible'} = 1;
 
   my $BaseDir=$Bin;
-  my $document = $word->Documents->Open("$BaseDir/$template");
+  my $document = $word_obj->Documents->Open("$BaseDir/$template");
   $document->SaveAs("$BaseDir/$outfile");
 
-  my $tables = $word->ActiveDocument->Tables;
+  my $tables = $word_obj->ActiveDocument->Tables;
 
   TABLE:
   for my $table (Win32::OLE::in($tables))
@@ -452,7 +461,7 @@ sub gen_word_output($$$$)
     for (my $r=1; $r<=$rows; ++$r) {
       my $text = $table->Cell($r,1)->Range->{Text};
       $text =~ s/[[:cntrl:]]+//g;
-      print STDERR "$r: [$text]\n";
+      print "$r: [$text]\n" if ($debug);
       if ($text =~ /^<(\w+):(\w+)>/) {
         my $tbl = $1;
         my $tag = "$1:$2";
@@ -462,7 +471,7 @@ sub gen_word_output($$$$)
         die "There is no table $tbl" unless ($data_table);
         # Replace the first line, add additional
         my @keys = sort grep {grep_mode($_, $data_table, $mode)} keys %$data_table;
-        print STDERR "Keys for table $tbl: " . join (";", @keys) . "\n";
+        #print STDERR "Keys for table $tbl: " . join (";", @keys) . "\n";
 
         my $num_keys = scalar(@keys);
         #print "Number of rows in $tbl table: $num_keys\n";
@@ -472,8 +481,8 @@ sub gen_word_output($$$$)
         for (2..$num_keys) {
           #print "Adding row in $tbl table...\n";
           $table->Rows->Item($r)->Select;
-          $word->Selection->Copy;
-          $word->Selection->PasteAppendTable;
+          $word_obj->Selection->Copy;
+          $word_obj->Selection->PasteAppendTable;
           #$table->Rows->Add($table->Rows($r));
         }
         # Process the added rows
