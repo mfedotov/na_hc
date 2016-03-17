@@ -31,7 +31,7 @@ my @files = <*.xlsx>;
 my $word_obj;
 my $excel_obj;
 END {
-   $word_obj->Quit();  
+#   $word_obj->Quit();  
 }
 
 for my $file (@files) {
@@ -62,6 +62,9 @@ for my $c (keys %xl_files) {
    gen_report ($c);
 }
 
+   
+$word_obj->Quit() if ($word_obj);
+exit(0);
 
 #========================================================================
 # 
@@ -96,6 +99,10 @@ use Win32::OLE::Const 'Microsoft.Word';    # wd  constants
 use Win32::OLE::Const 'Microsoft Office 14.0 Object Library';
 
 use English;
+
+BEGIN {
+  Win32::OLE->Option(Warn=>0) unless ($debug);
+}
 
 sub get_values($$$$);
 sub search($$$$);
@@ -390,7 +397,13 @@ sub gen_report($)
 
 
   print STDERR "Processing $hc_xl...\n";
-  my $hc_workbook = $excel_obj->parse($hc_xl);
+  
+  my $hc_workbook;
+  no warnings; 
+  $hc_workbook = $excel_obj->parse($hc_xl);
+    
+  die "Unable to open/parse file $hc_xl" unless ($hc_workbook);
+    
   my $capacity = $hc_workbook->worksheet("Predictive Capacity") or die;
 
   get_data_from_row ($capacity, 6, 7, \&aggregate_parser, \%aggregates, \%hosts);
@@ -491,7 +504,7 @@ sub gen_word_output($$$$)
           my $key = shift @keys;
           my $data_row = $data_table->{$key};
           for (my $col=1; $col<=$cols; ++$col) {
-             my $cell = $table->Cell($r+$i,$col);
+             my $cell = eval {$table->Cell($r+$i,$col)};
              my $txt = $cell ? $cell->Range->{Text} : "";
              #print "Cell ($i, $col): $txt\n";
              if ($txt =~ /^<CMP>/ && $col > 2) {
@@ -507,9 +520,10 @@ sub gen_word_output($$$$)
              if ($txt =~ /^<(\w+):(\w+)>/) {
                my $tag = "$1:$2";
                #print "Searching for $tag in " . Dumper ($data_row) . "\n";
-               if ($data_row->{$tag}) {
-                  #print STDERR "Replacing $txt with $data_row->{$tag}\n";
-                  $table->Cell($r+$i,$col)->Range->{Text} = $data_row->{$tag};
+               my $out = $data_row->{$tag};
+               if (defined($out) && $out ne "") {
+                  #print "Replacing $txt with $out\n" if $debug;
+                  $table->Cell($r+$i,$col)->Range->{Text} = $out;
                }
              }
           }
